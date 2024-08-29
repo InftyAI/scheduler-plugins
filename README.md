@@ -6,8 +6,8 @@ A Kubernetes scheduler designed for smart scheduling with llmaz.
 
 vScheduler maintains multiple plugins for llm workloads scheduling.
 
-### ResourceFungibility
+### ResourceFungibility Plugin
 
-A llama2-70B model can be run on 2xA100-80GB GPUs, can also be run on 4xA100-40GB GPUs, this is what we called fungibility.
+A `llama2-7B` model can be run on __1xA100__ GPU, can also be run on __1xA10__ GPU, this is what we called fungibility.
 
-With resourceFungibility plugin, we can simply achieve with at most 8 alternatives.
+With [resourceFungibility](./docs/plugins/resource_fungibility.md) plugin, we can simply achieve this with at most 8 alternative GPU types.
