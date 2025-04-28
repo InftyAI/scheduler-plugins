@@ -4,7 +4,7 @@ go 1.22.0
 toolchain go1.24.1
 
 require (
-	github.com/inftyai/llmaz v0.1.2
+	github.com/inftyai/llmaz v0.1.3
 	k8s.io/api v0.32.3
 	k8s.io/apimachinery v0.32.3
 	k8s.io/client-go v0.32.3
