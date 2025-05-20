@@ -213,23 +213,16 @@ func (rf *ResourceFungibility) Score(ctx context.Context, cycleState *framework.
 
 	node := nodeInfo.Node()
 
-	fmt.Println("Starting to calculate scores")
-
 	for i, flavor := range state.inferenceFlavors {
-		fmt.Println("flavor name is %s", flavor.name)
 		for k, v := range flavor.nodeSelectors {
-			fmt.Println("node label is %s, %s", k, v)
 			value, ok := node.Labels[k]
 			if ok && value == v {
-				fmt.Println("per score is %d", scoreWeights[i])
-				fmt.Println("final scores is %d", float32(scoreWeights[i])/float32(totalWeights)*100)
 				// Find the first matched node flavor.
 				return int64(math.Round(float64(scoreWeights[i]) / float64(totalWeights) * 100)), nil
 			}
 		}
 	}
 
-	fmt.Println("No matched flavor found, unexpected.")
 	// We should not reach here.
 	return 0, nil
 }
