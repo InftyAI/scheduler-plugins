@@ -1,0 +1,45 @@
+apiVersion: llmaz.io/v1alpha1
+kind: OpenModel
+metadata:
+  name: opt-125m
+spec:
+  familyName: opt
+  source:
+    modelHub:
+      modelID: facebook/opt-125m
+  inferenceConfig:
+    flavors:
+      - name: h800
+        nodeSelector:
+          karpenter.k8s.aws/instance-gpu-name: h800
+        limits:
+          nvidia.com/gpu: 4
+      - name: h100
+        nodeSelector:
+          karpenter.k8s.aws/instance-gpu-name: h100
+        limits:
+          nvidia.com/gpu: 4
+      - name: a100
+        nodeSelector:
+          karpenter.k8s.aws/instance-gpu-name: a100
+        limits:
+          nvidia.com/gpu: 4
+      - name: a20
+        nodeSelector:
+          karpenter.k8s.aws/instance-gpu-name: a20
+        limits:
+          nvidia.com/gpu: 4
+      - name: t4
+        nodeSelector:
+          karpenter.k8s.aws/instance-gpu-name: t4
+        limits:
+          nvidia.com/gpu: 4
+---
+apiVersion: inference.llmaz.io/v1alpha1
+kind: Playground
+metadata:
+  name: opt-125m
+spec:
+  replicas: 1
+  modelClaim:
+    modelName: opt-125m
