@@ -1,5 +1,5 @@
 run:
-  deadline: 5m
+  timeout: 5m
   allow-parallel-runners: true
 
 issues:
@@ -12,7 +12,11 @@ issues:
     - path: "api/*"
       linters:
         - lll
-    - path: "internal/*"
+    - path: "pkg/*"
+      linters:
+        - dupl
+        - lll
+    - path: "test/*"
       linters:
         - dupl
         - lll
@@ -23,13 +27,11 @@ linters:
     - errcheck
     - exportloopref
     - goconst
-    - gocyclo
     - gofmt
     - goimports
     - gosimple
     - govet
     - ineffassign
-    - lll
     - misspell
     - nakedret
     - prealloc

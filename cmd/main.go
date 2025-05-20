@@ -20,12 +20,12 @@ import (
 	"os"
 
 	// Ensure scheme package is initialized.
-	_ "github.com/inftyai/vscheduler/api/config/scheme"
+	_ "github.com/inftyai/scheduler/api/config/scheme"
 
 	"k8s.io/component-base/cli"
 	"k8s.io/kubernetes/cmd/kube-scheduler/app"
 
-	resourceFungibility "github.com/inftyai/vscheduler/pkg/plugins/resource_fungibility"
+	resourceFungibility "github.com/inftyai/scheduler/pkg/plugins/resource_fungibility"
 	//+kubebuilder:scaffold:imports
 )
 

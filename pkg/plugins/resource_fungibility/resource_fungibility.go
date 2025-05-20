@@ -19,8 +19,7 @@ package resourceFungibility
 import (
 	"context"
 	"fmt"
-
-	llmazcoreapi "github.com/inftyai/llmaz/api/core/v1alpha1"
+	"math"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,11 +27,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
+
+	llmazcoreapi "github.com/inftyai/llmaz/api/core/v1alpha1"
 )
 
 const (
-	Name              = "ResourceFungibility"
-	preFilterStateKey = "PreFilter" + Name
+	Name     = "ResourceFungibility"
+	stateKey = Name
 
 	modelNameLabelKey = llmazcoreapi.ModelNameLabelKey
 )
@@ -47,6 +48,7 @@ var (
 	resource = "openmodels"
 )
 
+// TODO: get the inference service to extract the flavors.
 type ResourceFungibility struct {
 	handle    framework.Handle
 	dynClient *dynamic.DynamicClient
@@ -57,18 +59,18 @@ type flavor struct {
 	nodeSelectors map[string]string
 }
 
-type preFilterState struct {
+type state struct {
 	// Max item number is 8, which is limited by the API validation.
 	inferenceFlavors []flavor
-	shouldSkipFilter bool
+	shouldSkip       bool
 }
 
-func (s *preFilterState) Clone() framework.StateData {
+func (s *state) Clone() framework.StateData {
 	if s == nil {
 		return nil
 	}
 
-	res := preFilterState{}
+	res := state{}
 
 	for _, f := range s.inferenceFlavors {
 		flavor := flavor{
@@ -103,21 +105,30 @@ func (rf *ResourceFungibility) Name() string {
 	return Name
 }
 
-func (rf *ResourceFungibility) PreFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
+func (rf *ResourceFungibility) PreFilter(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
+	state := state{}
+	defer func() {
+		cycleState.Write(stateKey, &state)
+	}()
+
 	modelName := pod.Labels[modelNameLabelKey]
 	if modelName == "" {
+		state.shouldSkip = true
 		return nil, framework.NewStatus(framework.Skip)
 	}
 
-	preFilterState, err := rf.calPreFilterState(ctx, pod)
+	err := rf.calPreFilterState(ctx, pod, &state)
 	if err != nil {
 		return nil, framework.AsStatus(err)
 	}
-	state.Write(preFilterStateKey, preFilterState)
+
+	if state.shouldSkip {
+		return nil, framework.NewStatus(framework.Skip)
+	}
 	return nil, nil
 }
 
-func (rf *ResourceFungibility) calPreFilterState(ctx context.Context, pod *v1.Pod) (*preFilterState, error) {
+func (rf *ResourceFungibility) calPreFilterState(ctx context.Context, pod *v1.Pod, s *state) error {
 	gvr := schema.GroupVersionResource{
 		Group:    group,
 		Version:  version,
@@ -128,17 +139,20 @@ func (rf *ResourceFungibility) calPreFilterState(ctx context.Context, pod *v1.Po
 	modelName := pod.Labels[modelNameLabelKey]
 	unstructuredModel, err := rf.dynClient.Resource(gvr).Get(ctx, modelName, metav1.GetOptions{})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	model := &llmazcoreapi.OpenModel{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(unstructuredModel.Object, model); err != nil {
-		return nil, err
+		return err
 	}
 
-	var shouldSkipFilter bool
-	s := preFilterState{}
-	for _, f := range model.Spec.InferenceFlavors {
+	if model.Spec.InferenceConfig == nil {
+		s.shouldSkip = true
+		return nil
+	}
+
+	for _, f := range model.Spec.InferenceConfig.Flavors {
 		flavor := flavor{
 			name:          string(f.Name),
 			nodeSelectors: map[string]string{},
@@ -146,33 +160,29 @@ func (rf *ResourceFungibility) calPreFilterState(ctx context.Context, pod *v1.Po
 		if len(f.NodeSelector) == 0 {
 			// Once nodeSelector is empty, which means all nodes are potential candidates,
 			// so we'll skip the Filter stage.
-			shouldSkipFilter = true
+			s.shouldSkip = true
+			return nil
 		}
+
 		for k, v := range f.NodeSelector {
 			flavor.nodeSelectors[k] = v
 		}
 		s.inferenceFlavors = append(s.inferenceFlavors, flavor)
 	}
-
-	s.shouldSkipFilter = shouldSkipFilter
-	return &s, nil
+	return nil
 }
 
 func (rf *ResourceFungibility) PreFilterExtensions() framework.PreFilterExtensions {
 	return nil
 }
 
-func (rf *ResourceFungibility) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
-	preFilterState, err := getPreFilterState(state)
+func (rf *ResourceFungibility) Filter(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
+	state, err := getState(cycleState)
 	if err != nil {
 		return framework.AsStatus(err)
 	}
 
-	if preFilterState.shouldSkipFilter {
-		return nil
-	}
-
-	for _, flavor := range preFilterState.inferenceFlavors {
+	for _, flavor := range state.inferenceFlavors {
 		for k, v := range flavor.nodeSelectors {
 			value, ok := nodeInfo.Node().Labels[k]
 			if ok && value == v {
@@ -184,33 +194,31 @@ func (rf *ResourceFungibility) Filter(ctx context.Context, state *framework.Cycl
 	return framework.NewStatus(framework.UnschedulableAndUnresolvable)
 }
 
-func (rf *ResourceFungibility) PreScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
-	modelName := pod.Labels[modelNameLabelKey]
-	if modelName == "" {
+func (rf *ResourceFungibility) PreScore(ctx context.Context, cycleState *framework.CycleState, pod *v1.Pod, nodes []*framework.NodeInfo) *framework.Status {
+	state, err := getState(cycleState)
+	if err != nil {
+		return framework.AsStatus(err)
+	}
+	if state.shouldSkip {
 		return framework.NewStatus(framework.Skip)
 	}
 	return nil
 }
 
-func (rf *ResourceFungibility) Score(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) (int64, *framework.Status) {
-	preFilterState, err := getPreFilterState(state)
+func (rf *ResourceFungibility) Score(ctx context.Context, cycleState *framework.CycleState, p *v1.Pod, nodeInfo *framework.NodeInfo) (int64, *framework.Status) {
+	state, err := getState(cycleState)
 	if err != nil {
 		return 0, framework.AsStatus(err)
 	}
 
-	nodeInfo, err := rf.handle.SnapshotSharedLister().NodeInfos().Get(nodeName)
-	if err != nil {
-		return 0, framework.AsStatus(fmt.Errorf("getting node %q from Snapshot: %w", nodeName, err))
-	}
-
 	node := nodeInfo.Node()
 
-	for i, flavor := range preFilterState.inferenceFlavors {
+	for i, flavor := range state.inferenceFlavors {
 		for k, v := range flavor.nodeSelectors {
 			value, ok := node.Labels[k]
 			if ok && value == v {
 				// Find the first matched node flavor.
-				return (int64(scoreWeights[i]) / int64(totalWeights)) * 100, nil
+				return int64(math.Round(float64(scoreWeights[i]) / float64(totalWeights) * 100)), nil
 			}
 		}
 	}
@@ -223,16 +231,15 @@ func (rf *ResourceFungibility) ScoreExtensions() framework.ScoreExtensions {
 	return nil
 }
 
-func getPreFilterState(cycleState *framework.CycleState) (*preFilterState, error) {
-	c, err := cycleState.Read(preFilterStateKey)
+func getState(cycleState *framework.CycleState) (*state, error) {
+	c, err := cycleState.Read(stateKey)
 	if err != nil {
-		// preFilterState doesn't exist, likely PreFilter wasn't invoked.
-		return nil, fmt.Errorf("reading %q from cycleState: %w", preFilterStateKey, err)
+		return nil, fmt.Errorf("reading %q from cycleState: %w", stateKey, err)
 	}
 
-	s, ok := c.(*preFilterState)
+	s, ok := c.(*state)
 	if !ok {
-		return nil, fmt.Errorf("%+v convert to resourceFungibility.preFilterState error", c)
+		return nil, fmt.Errorf("%+v convert to resourceFungibility.state error", c)
 	}
 	return s, nil
 }

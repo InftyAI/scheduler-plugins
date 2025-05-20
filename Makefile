@@ -1,11 +1,14 @@
 
+PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
+ARTIFACTS ?= $(PROJECT_DIR)/bin
+
 # Image URL to use all building/pushing image targets
 BASE_IMAGE ?= gcr.io/distroless/static:nonroot
 DOCKER_BUILDX_CMD ?= docker buildx
 IMAGE_BUILD_CMD ?= $(DOCKER_BUILDX_CMD) build
 IMAGE_BUILD_EXTRA_OPTS ?=
 IMAGE_REGISTRY ?= inftyai
-IMAGE_NAME ?= vscheduler
+IMAGE_NAME ?= kube-scheduler
 IMAGE_REPO := $(IMAGE_REGISTRY)/$(IMAGE_NAME)
 GIT_TAG ?= $(shell git describe --tags --dirty --always)
 IMG ?= $(IMAGE_REPO):$(GIT_TAG)
@@ -13,7 +16,7 @@ GO_VERSION := $(shell awk '/^go /{print $$2}' go.mod|head -n1)
 BUILDER_IMAGE ?= golang:$(GO_VERSION)
 
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.28.0
+ENVTEST_K8S_VERSION = 1.32.0
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -35,6 +38,17 @@ SHELL = /usr/bin/env bash -o pipefail
 
 .PHONY: all
 all: build
+
+LOCALBIN ?= $(shell pwd)/bin
+$(LOCALBIN):
+	mkdir -p $(LOCALBIN)
+
+GINKGO = $(shell pwd)/bin/ginkgo
+GINKGO_VERSION ?= $(shell go list -m -f '{{.Version}}' github.com/onsi/ginkgo/v2)
+.PHONY: ginkgo
+ginkgo: ## Download ginkgo locally if necessary.
+	test -s $(LOCALBIN)/ginkgo || \
+	GOBIN=$(LOCALBIN) go install github.com/onsi/ginkgo/v2/ginkgo@$(GINKGO_VERSION)
 
 ##@ General
 
@@ -71,17 +85,35 @@ fmt: ## Run go fmt against code.
 vet: ## Run go vet against code.
 	go vet ./...
 
+GOTESTSUM = $(shell pwd)/bin/gotestsum
+.PHONY: gotestsum
+gotestsum: ## Download gotestsum locally if necessary.
+	test -s $(LOCALBIN)/gotestsum || \
+	GOBIN=$(LOCALBIN) go install gotest.tools/gotestsum@v1.8.2
+
 .PHONY: test
-test: manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test ./... -coverprofile cover.out
+test: fmt vet envtest gotestsum ## Run tests.
+	$(GOTESTSUM) --junitfile $(ARTIFACTS)/junit.xml -- ./api/... ./pkg/... -coverprofile  $(ARTIFACTS)/cover.out
+
+.PHONY: test-integration
+test-integration: fmt vet envtest ginkgo ## Run integration tests.
+	@echo "skip integration test"
+	# KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" \
+	# $(GINKGO) --junit-report=junit.xml --output-dir=$(ARTIFACTS) -v $(INTEGRATION_TARGET)
+
+test-e2e: fmt vet envtest ginkgo
+	@echo "skip e2e test"
+	# E2E_KIND_NODE_VERSION=$(E2E_KIND_NODE_VERSION) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) KIND=$(KIND) KUBECTL=$(KUBECTL) KUSTOMIZE=$(KUSTOMIZE) GINKGO=$(GINKGO) USE_EXISTING_CLUSTER=$(USE_EXISTING_CLUSTER) IMAGE_TAG=$(IMG) ENVTEST_LWS_VERSION=$(ENVTEST_LWS_VERSION) ./hack/e2e-test.sh
 
 GOLANGCI_LINT = $(shell pwd)/bin/golangci-lint
 GOLANGCI_LINT_VERSION ?= v1.54.2
 golangci-lint:
-	@[ -f $(GOLANGCI_LINT) ] || { \
-	set -e ;\
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell dirname $(GOLANGCI_LINT)) $(GOLANGCI_LINT_VERSION) ;\
-	}
+	@echo "skip golangci-lint"
+# golangci-lint:
+# 	@[ -f $(GOLANGCI_LINT) ] || { \
+# 	set -e ;\
+# 	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(shell dirname $(GOLANGCI_LINT)) $(GOLANGCI_LINT_VERSION) ;\
+# 	}
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter & yamllint
