@@ -23,6 +23,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -56,7 +57,7 @@ type ResourceFungibility struct {
 
 type flavor struct {
 	name          string
-	nodeSelectors map[string]string
+	nodeSelectors labels.Selector
 }
 
 type state struct {
@@ -75,11 +76,9 @@ func (s *state) Clone() framework.StateData {
 	for _, f := range s.inferenceFlavors {
 		flavor := flavor{
 			name:          f.name,
-			nodeSelectors: map[string]string{},
+			nodeSelectors: f.nodeSelectors.DeepCopySelector(),
 		}
-		for k, v := range f.nodeSelectors {
-			flavor.nodeSelectors[k] = v
-		}
+		res.inferenceFlavors = append(res.inferenceFlavors, flavor)
 	}
 
 	return &res
@@ -153,10 +152,6 @@ func (rf *ResourceFungibility) calPreFilterState(ctx context.Context, pod *v1.Po
 	}
 
 	for _, f := range model.Spec.InferenceConfig.Flavors {
-		flavor := flavor{
-			name:          string(f.Name),
-			nodeSelectors: map[string]string{},
-		}
 		if len(f.NodeSelector) == 0 {
 			// Once nodeSelector is empty, which means all nodes are potential candidates,
 			// so we'll skip the Filter stage.
@@ -164,8 +159,9 @@ func (rf *ResourceFungibility) calPreFilterState(ctx context.Context, pod *v1.Po
 			return nil
 		}
 
-		for k, v := range f.NodeSelector {
-			flavor.nodeSelectors[k] = v
+		flavor := flavor{
+			name:          string(f.Name),
+			nodeSelectors: labels.SelectorFromSet(f.NodeSelector),
 		}
 		s.inferenceFlavors = append(s.inferenceFlavors, flavor)
 	}
@@ -182,13 +178,13 @@ func (rf *ResourceFungibility) Filter(ctx context.Context, cycleState *framework
 		return framework.AsStatus(err)
 	}
 
+	node := nodeInfo.Node()
+
 	for _, flavor := range state.inferenceFlavors {
-		for k, v := range flavor.nodeSelectors {
-			value, ok := nodeInfo.Node().Labels[k]
-			if ok && value == v {
-				// At least one flavor matches with the node, success then.
-				return nil
-			}
+		nodeLabels := labels.Set(node.Labels)
+		if !flavor.nodeSelectors.Matches(nodeLabels) {
+			// At least one flavor matches with the node, success then.
+			return nil
 		}
 	}
 	return framework.NewStatus(framework.UnschedulableAndUnresolvable)
@@ -214,12 +210,10 @@ func (rf *ResourceFungibility) Score(ctx context.Context, cycleState *framework.
 	node := nodeInfo.Node()
 
 	for i, flavor := range state.inferenceFlavors {
-		for k, v := range flavor.nodeSelectors {
-			value, ok := node.Labels[k]
-			if ok && value == v {
-				// Find the first matched node flavor.
-				return int64(math.Round(float64(scoreWeights[i]) / float64(totalWeights) * 100)), nil
-			}
+		nodeLabels := labels.Set(node.Labels)
+		if flavor.nodeSelectors.Matches(nodeLabels) {
+			// Find the first matched node flavor.
+			return int64(math.Round(float64(scoreWeights[i]) / float64(totalWeights) * 100)), nil
 		}
 	}
 
