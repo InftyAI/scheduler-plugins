@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.scheduler.name }}
+  labels:
+    app.kubernetes.io/component: scheduler
+    app.kubernetes.io/created-by: scheduler-plugins
+    app.kubernetes.io/part-of: scheduler-plugins
+    control-plane: scheduler
+    {{- include "chart.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.scheduler.replicaCount }}
+  selector:
+    matchLabels:
+      control-plane: scheduler
+      {{- include "chart.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        control-plane: scheduler
+        {{- include "chart.selectorLabels" . | nindent 8 }}
+      annotations:
+        kubectl.kubernetes.io/default-container: scheduler
+    spec:
+      {{- with .Values.scheduler.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      serviceAccountName:  {{ .Values.scheduler.name }}
+      containers:
+      - command: {{- toYaml .Values.scheduler.command | nindent 8 }}
+        args:
+        - --config=/etc/kubernetes/scheduler-config.yaml
+        image: {{ .Values.scheduler.image.repository }}:{{ .Values.scheduler.image.tag | default .Chart.AppVersion }}
+        {{- with .Values.scheduler.image.pullPolicy }}
+        imagePullPolicy: {{ . }}
+        {{- end }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 10259
+            scheme: HTTPS
+          initialDelaySeconds: 15
+        name: scheduler
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: 10259
+            scheme: HTTPS
+        {{- with .Values.scheduler.resources }}
+        resources: {{- toYaml . | nindent 10 }}
+        {{- end }}
+        securityContext:
+          privileged: false
+        volumeMounts:
+        - name: scheduler-config
+          mountPath: /etc/kubernetes
+          readOnly: true
+      hostNetwork: false
+      hostPID: false
+      volumes:
+      - name: scheduler-config
+        configMap:
+          name: {{ .Values.scheduler.name }}-scheduler-config
+      {{- with .Values.scheduler.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.scheduler.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
