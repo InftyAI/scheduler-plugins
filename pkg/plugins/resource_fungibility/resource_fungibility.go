@@ -182,7 +182,7 @@ func (rf *ResourceFungibility) Filter(ctx context.Context, cycleState *framework
 
 	for _, flavor := range state.inferenceFlavors {
 		nodeLabels := labels.Set(node.Labels)
-		if !flavor.nodeSelectors.Matches(nodeLabels) {
+		if flavor.nodeSelectors.Matches(nodeLabels) {
 			// At least one flavor matches with the node, success then.
 			return nil
 		}
