@@ -50,6 +50,7 @@ Generally looks like:
 ```yaml
   containers:
   - commands:
+    - /kube-scheduler
     - --feature-gates=MaxUnavailableStatefulSet=true # this is require by lws
     - --config=/etc/kubernetes/kube-scheduler-config.yaml # set the kube-scheduler-config.yaml
     # - --v=6 # debugging only.
