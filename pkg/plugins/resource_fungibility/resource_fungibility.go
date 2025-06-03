@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
+	"strings"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,13 +32,15 @@ import (
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 
 	llmazcoreapi "github.com/inftyai/llmaz/api/core/v1alpha1"
+	llmazinferenceapi "github.com/inftyai/llmaz/api/inference/v1alpha1"
 )
 
 const (
 	Name     = "ResourceFungibility"
 	stateKey = Name
 
-	modelNameLabelKey = llmazcoreapi.ModelNameLabelKey
+	modelNameLabelKey              = llmazcoreapi.ModelNameLabelKey
+	inferenceServiceFlavorsAnnoKey = llmazinferenceapi.InferenceServiceFlavorsAnnoKey
 )
 
 var (
@@ -151,7 +155,24 @@ func (rf *ResourceFungibility) calPreFilterState(ctx context.Context, pod *v1.Po
 		return nil
 	}
 
-	for _, f := range model.Spec.InferenceConfig.Flavors {
+	// By default, all flavors configuired in the model will be used. But if the given annontation is set,
+	// it means that the inference service overrides the default value with a subset of the model's flavors
+	// and the scheduler should respect the order of flavors configured in the annotation.
+	serviceFlavors := model.Spec.InferenceConfig.Flavors
+	if v, ok := pod.Annotations[inferenceServiceFlavorsAnnoKey]; ok {
+		serviceFlavors = nil
+		for _, flavorName := range strings.Split(v, ",") {
+			idx := slices.IndexFunc(model.Spec.InferenceConfig.Flavors, func(f llmazcoreapi.Flavor) bool {
+				return string(f.Name) == flavorName
+			})
+			if idx == -1 {
+				return fmt.Errorf("flavor %q not found in model %q", flavorName, modelName)
+			}
+			serviceFlavors = append(serviceFlavors, model.Spec.InferenceConfig.Flavors[idx])
+		}
+	}
+
+	for _, f := range serviceFlavors {
 		if len(f.NodeSelector) == 0 {
 			// Once nodeSelector is empty, which means all nodes are potential candidates,
 			// so we'll skip the Filter stage.
