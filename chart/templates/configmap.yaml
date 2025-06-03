@@ -1,0 +1,32 @@
+{{- if .Values.plugins.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.scheduler.name }}-scheduler-config
+data:
+  scheduler-config.yaml: |
+    apiVersion: kubescheduler.config.k8s.io/v1
+    kind: KubeSchedulerConfiguration
+    leaderElection:
+      leaderElect: {{ .Values.scheduler.leaderElect }}
+      resourceNamespace: {{ .Release.Namespace }}
+      resourceName: {{ .Values.scheduler.name }}
+    profiles:
+    # Compose all plugins in one profile
+    - schedulerName: {{ .Values.scheduler.name }}
+      plugins:
+        multiPoint:
+          enabled:
+          {{- range $.Values.plugins.enabled }}
+          - name: {{ title .name }}
+            weight: {{ .weight }}
+          {{- end }}
+          disabled:
+          {{- range $.Values.plugins.disabled }}
+          - name: {{ title .name }}
+          {{- end }}
+      {{- if $.Values.pluginConfig }}
+      pluginConfig: {{ toYaml $.Values.pluginConfig | nindent 6 }}
+      {{- end }}
+
+{{- end }}

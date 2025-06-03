@@ -1,0 +1,36 @@
+# Default values for chart.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+scheduler:
+  name: llmaz-scheduler
+  image:
+    repository: inftyai/kube-scheduler
+    tag: v0.0.1
+    pullPolicy: IfNotPresent
+  command:
+  - /kube-scheduler
+  replicaCount: 1
+  leaderElect: false
+  priorityClassName: ""
+  resources: {}
+  nodeSelector: {}
+  affinity: {}
+  tolerations: []
+
+
+plugins:
+  enabled:
+  - name: ResourceFungibility
+    weight: 10 # make sure this plugin dominates the scheduling since GPU is scarce
+  disabled: [] # only in-tree plugins need to be defined here
+
+# Customize the enabled plugins' config.
+# Refer to the "pluginConfig" section of manifests/<plugin>/scheduler-config.yaml.
+# For example, for ResourceFungibility plugin, like below:
+pluginConfig:
+# - name: ResourceFungibility
+#   args:
+#
+# Or, customize the other plugins
+# ...
