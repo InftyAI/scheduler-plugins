@@ -53,10 +53,9 @@ var (
 	resource = "openmodels"
 )
 
-// TODO: get the inference service to extract the flavors.
 type ResourceFungibility struct {
 	handle    framework.Handle
-	dynClient *dynamic.DynamicClient
+	dynClient dynamic.Interface
 }
 
 type flavor struct {
@@ -170,6 +169,11 @@ func (rf *ResourceFungibility) calPreFilterState(ctx context.Context, pod *v1.Po
 			}
 			serviceFlavors = append(serviceFlavors, model.Spec.InferenceConfig.Flavors[idx])
 		}
+	}
+
+	if len(serviceFlavors) == 0 {
+		s.shouldSkip = true
+		return nil
 	}
 
 	for _, f := range serviceFlavors {
