@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/informers"
 	clientsetfake "k8s.io/client-go/kubernetes/fake"
 	restclient "k8s.io/client-go/rest"
+	"k8s.io/kubernetes/pkg/scheduler/backend/cache"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultbinder"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/queuesort"
@@ -356,6 +357,213 @@ func TestResourceFungibility_Filter(t *testing.T) {
 				if diff := cmp.Diff(tc.wantFilterStatus, gotStatus); diff != "" {
 					t.Errorf("unexpected Filter status (-want, +got):\n%s", diff)
 				}
+			}
+		})
+	}
+}
+
+func TestResourceFungibility_Score(t *testing.T) {
+	tests := []struct {
+		name               string
+		pod                *v1.Pod
+		model              *llmazcoreapi.OpenModel
+		nodes              []*v1.Node
+		expectedList       framework.NodeScoreList
+		wantPreScoreStatus *framework.Status
+	}{
+		{
+			name:               "pod without model label",
+			pod:                &v1.Pod{},
+			wantPreScoreStatus: framework.NewStatus(framework.Skip),
+		},
+		{
+			name: "model without inference config",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{modelNameLabelKey: "test-model"},
+				},
+			},
+			model: &llmazcoreapi.OpenModel{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "llmaz.io/v1alpha1",
+					Kind:       "OpenModel",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-model",
+				},
+			},
+			wantPreScoreStatus: framework.NewStatus(framework.Skip),
+		},
+		{
+			name: "model has flavors but at least one flavor has empty nodeSelector",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{modelNameLabelKey: "test-model"},
+				},
+			},
+			model: &llmazcoreapi.OpenModel{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "llmaz.io/v1alpha1",
+					Kind:       "OpenModel",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-model",
+				},
+				Spec: llmazcoreapi.ModelSpec{
+					InferenceConfig: &llmazcoreapi.InferenceConfig{
+						Flavors: []llmazcoreapi.Flavor{
+							{
+								Name: "none",
+							},
+							{
+								Name:         "empty",
+								NodeSelector: map[string]string{},
+							},
+							{
+								Name:         "t4",
+								NodeSelector: map[string]string{"karpenter.k8s.aws/instance-gpu-name": "t4"},
+							},
+						},
+					},
+				},
+			},
+			wantPreScoreStatus: framework.NewStatus(framework.Skip),
+		},
+		{
+			name: "model has flavors but at least one flavor has empty nodeSelector",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{modelNameLabelKey: "test-model"},
+				},
+			},
+			model: &llmazcoreapi.OpenModel{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "llmaz.io/v1alpha1",
+					Kind:       "OpenModel",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-model",
+				},
+				Spec: llmazcoreapi.ModelSpec{
+					InferenceConfig: &llmazcoreapi.InferenceConfig{
+						Flavors: []llmazcoreapi.Flavor{
+							{
+								Name: "none",
+							},
+							{
+								Name:         "empty",
+								NodeSelector: map[string]string{},
+							},
+							{
+								Name:         "t4",
+								NodeSelector: map[string]string{"karpenter.k8s.aws/instance-gpu-name": "t4"},
+							},
+						},
+					},
+				},
+			},
+			wantPreScoreStatus: framework.NewStatus(framework.Skip),
+		},
+		{
+			name: "2 flavors, 2 nodes",
+			pod: &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{modelNameLabelKey: "test-model"},
+				},
+			},
+			model: &llmazcoreapi.OpenModel{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: "llmaz.io/v1alpha1",
+					Kind:       "OpenModel",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-model",
+				},
+				Spec: llmazcoreapi.ModelSpec{
+					InferenceConfig: &llmazcoreapi.InferenceConfig{
+						Flavors: []llmazcoreapi.Flavor{
+							{
+								Name:         "t4",
+								NodeSelector: map[string]string{"karpenter.k8s.aws/instance-gpu-name": "t4"},
+							},
+							{
+								Name:         "a100",
+								NodeSelector: map[string]string{"karpenter.k8s.aws/instance-gpu-name": "a100"},
+							},
+						},
+					},
+				},
+			},
+			nodes: []*v1.Node{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "node1", Labels: map[string]string{"karpenter.k8s.aws/instance-gpu-name": "t4"}}},
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: "node2", Labels: map[string]string{"karpenter.k8s.aws/instance-gpu-name": "a100"}},
+				},
+			},
+			expectedList: framework.NodeScoreList{
+				{
+					Name:  "node1",
+					Score: 39,
+				},
+				{
+					Name:  "node2",
+					Score: 24,
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			fr, err := tf.NewFramework(ctx, registeredPlugins, Name, frameworkruntime.WithSnapshotSharedLister(cache.NewSnapshot(nil, tc.nodes)))
+			if err != nil {
+				t.Fatalf("failed to create framework: %v", err)
+			}
+
+			scheme := runtime.NewScheme()
+			dynClient := dynamicfake.NewSimpleDynamicClient(scheme)
+			if tc.model != nil {
+				dynClient = dynamicfake.NewSimpleDynamicClient(scheme, tc.model)
+			}
+
+			p := &ResourceFungibility{
+				handle:    fr,
+				dynClient: dynClient,
+			}
+
+			// PreScore needs to read the state which is written by PreFilter.
+			state := framework.NewCycleState()
+			p.PreFilter(ctx, state, tc.pod)
+
+			status := p.PreScore(ctx, state, tc.pod, tf.BuildNodeInfos(tc.nodes))
+			if status.Code() != tc.wantPreScoreStatus.Code() {
+				t.Errorf("unexpected status code from PreScore: want: %v got: %v", tc.wantPreScoreStatus.Code().String(), status.Code().String())
+			}
+			if status.Message() != tc.wantPreScoreStatus.Message() {
+				t.Errorf("unexpected status message from PreScore: want: %v got: %v", tc.wantPreScoreStatus.Message(), status.Message())
+			}
+			if !status.IsSuccess() {
+				// no need to proceed.
+				return
+			}
+
+			var gotList framework.NodeScoreList
+			nodeInfos := tf.BuildNodeInfos(tc.nodes)
+			for _, nodeInfo := range nodeInfos {
+				nodeName := nodeInfo.Node().Name
+				score, status := p.Score(ctx, state, tc.pod, nodeInfo)
+				if !status.IsSuccess() {
+					t.Errorf("unexpected error: %v", status)
+				}
+				gotList = append(gotList, framework.NodeScore{Name: nodeName, Score: score})
+			}
+
+			if diff := cmp.Diff(tc.expectedList, gotList); diff != "" {
+				t.Errorf("obtained scores (-want,+got):\n%s", diff)
 			}
 		})
 	}
