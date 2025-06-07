@@ -233,3 +233,11 @@ $(CONTROLLER_GEN): $(LOCALBIN)
 envtest: $(ENVTEST) ## Download envtest-setup locally if necessary.
 $(ENVTEST): $(LOCALBIN)
 	test -s $(LOCALBIN)/setup-envtest || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+
+
+.PHONY: helm-lint
+helm-lint: ## Lint helm chart
+	helm lint ./chart
+.PHONY: helm-package
+helm-package: helm-lint
+	helm package ./chart --destination ./artifacts
